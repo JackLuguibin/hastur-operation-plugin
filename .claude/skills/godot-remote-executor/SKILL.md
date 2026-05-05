@@ -1,7 +1,7 @@
 ---
 name: godot-remote-executor
 description: |
-  Execute GDScript code on a running Godot editor or game runtime via the Hastur broker-server HTTP API. Use this skill whenever the user wants to manipulate a Godot editor or running game remotely — creating/modifying scenes, adjusting node properties, running editor operations, inspecting project state, querying live game runtime state (scene tree, physics, FPS, input, variables), or any task that requires interacting with a live Godot instance. The broker-server supports two executor types: "editor" (the editor plugin) and "game" (a GameExecutor autoload running in the game process). Target the game runtime by specifying `type: "game"` in execute requests. Trigger this skill when the user mentions Godot, Godot editor, GDScript execution, scene manipulation, node operations, game runtime inspection, live game state, or any task involving controlling a Godot project remotely, even if they don't explicitly mention "broker" or "remote execution." Also use when the user asks to inspect, query, or modify anything in their Godot project while the editor or game is running.
+  Execute GDScript code on a running Godot editor or game runtime via the Hastur broker-server HTTP API (no Bearer token — use only on localhost or trusted networks). Use this skill whenever the user wants to manipulate a Godot editor or running game remotely — creating/modifying scenes, adjusting node properties, running editor operations, inspecting project state, querying live game runtime state (scene tree, physics, FPS, input, variables), or any task that requires interacting with a live Godot instance. The broker-server supports two executor types: "editor" (the editor plugin) and "game" (a GameExecutor autoload running in the game process). Target the game runtime by specifying `type: "game"` in execute requests. Trigger this skill when the user mentions Godot, Godot editor, GDScript execution, scene manipulation, node operations, game runtime inspection, live game state, or any task involving controlling a Godot project remotely, even if they don't explicitly mention "broker" or "remote execution." Also use when the user asks to inspect, query, or modify anything in their Godot project while the editor or game is running.
 ---
 
 # Godot Remote Executor
@@ -12,14 +12,13 @@ Executors have a `type` field: `"editor"` for the editor plugin, `"game"` for th
 
 ## Prerequisites
 
-Before you begin, you need two things from the user:
+Before you begin, confirm the broker-server **base URL** with the user. It defaults to `http://localhost:5302`; the host and port depend on how the broker was started (`--host`, `--http-port`).
 
-1. **Auth token** — The broker-server requires a Bearer token for authentication. Ask the user for it if not provided. It was printed to stdout when the broker-server started.
-2. **Base URL** — Defaults to `http://localhost:5302`. The user may specify a different host/port.
+Store for the duration of the conversation:
 
-Store these for the duration of the conversation:
-- `HASTUR_AUTH_TOKEN` — the Bearer token
 - `HASTUR_BASE_URL` — defaults to `http://localhost:5302`
+
+The HTTP API does **not** use Bearer authentication. Treat the broker as a privileged service: bind it to localhost or put it behind a trusted network boundary — anyone who can reach the HTTP port can call `POST /api/execute` and run code in connected editors/games.
 
 ## Step 0: Read GDScript Syntax Reference (Critical)
 
@@ -56,7 +55,7 @@ For code style conventions, read:
 First, check which Godot executors are connected to the broker-server. Run:
 
 ```bash
-curl -s -H "Authorization: Bearer HASTUR_AUTH_TOKEN" HASTUR_BASE_URL/api/executors
+curl -s HASTUR_BASE_URL/api/executors
 ```
 
 The response looks like:
@@ -168,7 +167,6 @@ Send GDScript code to a connected editor via POST request:
 
 ```bash
 curl -s -X POST \
-  -H "Authorization: Bearer HASTUR_AUTH_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"code": "<GDScript code here>", "executor_id": "<executor id>"}' \
   HASTUR_BASE_URL/api/execute
@@ -189,7 +187,6 @@ Add `"type": "editor"` or `"type": "game"` to the request body to restrict the e
 
 ```bash
 curl -s -X POST \
-  -H "Authorization: Bearer HASTUR_AUTH_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"code": "executeContext.output(\"fps\", str(Engine.get_frames_per_second()))", "project_name": "my-game", "type": "game"}' \
   HASTUR_BASE_URL/api/execute

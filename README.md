@@ -34,11 +34,11 @@ The architecture is straightforward — a three-part relay:
 └─────────────────┘         └─────────────────┘         └─────────────────────┘
 ```
 
-1. **Coding Agent** sends a `POST /api/execute` request containing GDScript code and an auth token.
-2. **Broker Server** authenticates the request, locates the target editor via TCP, and relays the code.
+1. **Coding Agent** sends a `POST /api/execute` request containing GDScript code (and identifiers to pick a connected executor).
+2. **Broker Server** locates the target editor via TCP and relays the code.
 3. **Hastur Executor Plugin** (running inside the Godot editor) receives the code, compiles and executes it, then returns the result back through the same pipe.
 
-The broker server exists because Godot's built-in HTTP client capabilities are... modest, and having a proper HTTP server with Bearer token authentication is a reasonable security boundary between "the internet" and "arbitrary code execution inside your game editor."
+The broker server exists because Godot's built-in HTTP client capabilities are... modest. The HTTP API does **not** authenticate callers — treat it as a privileged local service: bind to `localhost` (the default) or keep it on a network you fully trust.
 
 ## Project Structure
 
@@ -58,10 +58,9 @@ hastur-operation-plugin/
 ├── broker-server/                   # The relay server (Node.js)
 │   ├── src/
 │   │   ├── index.ts                 # CLI entry point (commander)
-│   │   ├── http-server.ts           # Express HTTP API (auth, execute, executors)
+│   │   ├── http-server.ts           # Express HTTP API (execute, executors, health)
 │   │   ├── tcp-server.ts            # TCP relay to Godot plugin instances
 │   │   ├── executor-manager.ts      # Tracks connected editor instances
-│   │   ├── auth.ts                  # Bearer token authentication middleware
 │   │   └── types.ts                 # Shared TypeScript interfaces
 │   └── package.json
 │
@@ -86,12 +85,12 @@ npm install
 npm run dev
 ```
 
-This starts the broker server on `localhost:5302` (HTTP) and `localhost:5301` (TCP) with a default auth token. The token will be printed to stdout — you'll need it shortly.
+This starts the broker server on `localhost:5302` (HTTP) and `localhost:5301` (TCP).
 
-You can also configure ports and auth token manually:
+You can also configure host and ports manually:
 
 ```bash
-npx tsx src/index.ts --http-port 8080 --tcp-port 8081 --auth-token your-secret-token
+npx tsx src/index.ts --http-port 8080 --tcp-port 8081 --host localhost
 ```
 
 ### Step 2: Install the Plugin in Godot
@@ -104,20 +103,16 @@ Once connected, the editor dock panel will show a green connection status. If it
 
 ### Step 3: Give Your Coding Agent the Keys
 
-Load the `godot-remote-executor` skill in your coding agent and provide:
-
-1. **Auth token** — the token printed when the broker server started.
-2. **Base URL** — defaults to `http://localhost:5302`.
+Load the `godot-remote-executor` skill in your coding agent and provide the **base URL** (defaults to `http://localhost:5302`).
 
 Your agent can now discover connected editors and execute GDScript code on them. For example:
 
 ```bash
 # List connected editors
-curl -s -H "Authorization: Bearer <token>" http://localhost:5302/api/executors
+curl -s http://localhost:5302/api/executors
 
 # Execute code
 curl -s -X POST \
-  -H "Authorization: Bearer <token>" \
   -H "Content-Type: application/json" \
   -d '{"code": "print(\"hello from the other side\")", "project_name": "my-game"}' \
   http://localhost:5302/api/execute
@@ -127,15 +122,15 @@ curl -s -X POST \
 
 ### `GET /api/health`
 
-Health check. No auth required.
+Health check.
 
 ### `GET /api/executors`
 
-List all connected Godot editor instances. Requires Bearer token auth.
+List all connected Godot editor instances.
 
 ### `POST /api/execute`
 
-Execute GDScript code on a connected editor. Requires Bearer token auth.
+Execute GDScript code on a connected editor.
 
 **Request body:**
 
@@ -187,11 +182,10 @@ func execute(executeContext):
 
 ## A Note on Security
 
-This plugin literally executes arbitrary code in your editor. The broker server uses Bearer token authentication to prevent unauthorized access, but you should still:
+This plugin literally executes arbitrary code in your editor. The HTTP API has **no authentication** — anyone who can reach the broker's HTTP port can list executors and run code on connected editors or games. You should:
 
-- **Never expose the broker server to the public internet.** Bind to `localhost` (the default).
-- **Keep your auth token secret.** It's a crypto-random 64-character hex string. Treat it like a password, because functionally it is one.
-- **Trust your coding agent.** It can do anything GDScript can do, which is quite a lot.
+- **Never expose the broker server to the public internet.** Bind to `localhost` (the default) or keep it inside a trusted network only.
+- **Trust your coding agent and your network.** If the port is reachable, assume full editor access is possible.
 
 ## License
 

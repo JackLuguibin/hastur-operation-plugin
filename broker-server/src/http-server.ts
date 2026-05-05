@@ -1,18 +1,15 @@
-import express, { type Request, type Response, type NextFunction } from 'express'
+import express, { type Request, type Response } from 'express'
 import { ExecutorManager } from './executor-manager.js'
 import { TcpServer } from './tcp-server.js'
-import { createAuthMiddleware } from './auth.js'
 import type { ApiResponse } from './types.js'
 
 export function createHttpApp(
 	executorManager: ExecutorManager,
 	tcpServer: TcpServer,
-	authToken: string,
 	tcpPort: number,
 	httpPort: number,
 ) {
 	const app = express()
-	const authMiddleware = createAuthMiddleware(authToken)
 
 	app.use(express.json())
 
@@ -26,14 +23,6 @@ export function createHttpApp(
 				executors_connected: executorManager.getAll().length,
 			},
 		})
-	})
-
-	app.use('/api', (req: Request, res: Response, next: NextFunction) => {
-		if (req.path === '/health') {
-			next()
-			return
-		}
-		authMiddleware(req, res, next)
 	})
 
 	app.get('/api/executors', (_req: Request, res: Response) => {

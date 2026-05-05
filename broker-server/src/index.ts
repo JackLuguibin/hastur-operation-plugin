@@ -1,4 +1,3 @@
-import crypto from 'crypto'
 import { Command } from 'commander'
 import { ExecutorManager } from './executor-manager.js'
 import { TcpServer } from './tcp-server.js'
@@ -10,7 +9,6 @@ program
 	.option('--tcp-port <port>', 'TCP port for executor connections', '5301')
 	.option('--http-port <port>', 'HTTP port for API', '5302')
 	.option('--host <host>', 'Host to bind to', 'localhost')
-	.option('--auth-token <token>', 'Authentication token for HTTP API')
 	.parse()
 
 const options = program.opts()
@@ -18,15 +16,9 @@ const tcpPort = parseInt(options.tcpPort as string, 10)
 const httpPort = parseInt(options.httpPort as string, 10)
 const host = options.host as string
 
-const authToken = (options.authToken as string) || crypto.randomBytes(32).toString('hex')
-
-if (!options.authToken) {
-	console.log(`Auto-generated auth token: ${authToken}`)
-}
-
 const executorManager = new ExecutorManager()
 const tcpServer = new TcpServer(executorManager)
-const app = createHttpApp(executorManager, tcpServer, authToken, tcpPort, httpPort)
+const app = createHttpApp(executorManager, tcpServer, tcpPort, httpPort)
 
 async function main(): Promise<void> {
 	await tcpServer.start(host, tcpPort)
