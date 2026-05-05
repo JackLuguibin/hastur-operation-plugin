@@ -37,7 +37,7 @@ func _ready() -> void:
 	)
 	var err: Error = _http_api.start()
 	var executor_id := _compute_executor_id()
-	var listen_url := _format_listen_url(bind_host, bind_port)
+	var listen_url: String = HasturOperationGDPluginSettings.format_http_base_url(bind_host, bind_port)
 	if err != OK:
 		push_error(
 			"HasturExecutorHttpApi: listen failed (%s) on %s:%d — remote HTTP API disabled."
@@ -97,10 +97,11 @@ func clear_history() -> void:
 func get_listen_url() -> String:
 	if _http_api == null or not _http_api.is_listening():
 		return ""
-	return _format_listen_url(
-		HasturOperationGDPluginSettings.get_http_bind_host(),
-		HasturOperationGDPluginSettings.get_http_port(),
-	)
+	return HasturOperationGDPluginSettings.get_editor_http_base_url()
+
+
+func get_game_api_base_url() -> String:
+	return HasturOperationGDPluginSettings.get_game_http_base_url()
 
 
 func get_executor_id() -> String:
@@ -111,13 +112,6 @@ func _compute_executor_id() -> String:
 	var project_name: String = ProjectSettings.get_setting("application/config/name", "Unnamed")
 	var project_path: String = ProjectSettings.globalize_path("res://")
 	return HasturOperationGDPluginSettings.deterministic_executor_id(project_name, project_path, OS.get_process_id())
-
-
-func _format_listen_url(host: String, port: int) -> String:
-	var safe_host := host
-	if ":" in safe_host and not safe_host.begins_with("["):
-		safe_host = "[%s]" % safe_host
-	return "http://%s:%d" % [safe_host, port]
 
 
 func _on_remote_http_execution(code: String, result: Dictionary, duration_ms: int) -> void:

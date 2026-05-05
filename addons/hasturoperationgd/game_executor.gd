@@ -1,3 +1,4 @@
+@tool
 extends Node
 
 const _GdScriptExecutorRes = preload("./gdscript_executor.gd")

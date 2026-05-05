@@ -1,4 +1,7 @@
+@tool
 class_name HasturOperationGDPluginSettings
+
+const PLUGIN_CFG_RES_PATH := "res://addons/hasturoperationgd/plugin.cfg"
 
 
 static func register_settings() -> void:
@@ -55,6 +58,31 @@ static func get_http_port() -> int:
 
 static func get_game_http_port() -> int:
 	return ProjectSettings.get_setting("hastur_operation/game_http_port", 5303)
+
+
+static func format_http_base_url(host: String, port: int) -> String:
+	if port <= 0:
+		return ""
+	var safe_host := host
+	if ":" in safe_host and not safe_host.begins_with("["):
+		safe_host = "[%s]" % safe_host
+	return "http://%s:%d" % [safe_host, port]
+
+
+static func get_editor_http_base_url() -> String:
+	return format_http_base_url(get_http_bind_host(), get_http_port())
+
+
+static func get_game_http_base_url() -> String:
+	return format_http_base_url(get_http_bind_host(), get_game_http_port())
+
+
+static func get_plugin_version() -> String:
+	var cfg := ConfigFile.new()
+	var err := cfg.load(PLUGIN_CFG_RES_PATH)
+	if err != OK:
+		return "unknown"
+	return str(cfg.get_value("plugin", "version", "unknown"))
 
 
 static func deterministic_executor_id(project_name: String, project_path: String, process_id: int) -> String:

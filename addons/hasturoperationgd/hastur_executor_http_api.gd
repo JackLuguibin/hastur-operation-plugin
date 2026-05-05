@@ -1,3 +1,4 @@
+@tool
 class_name HasturExecutorHttpApi
 extends RefCounted
 
@@ -77,7 +78,7 @@ func _executor_snapshot() -> Dictionary:
 	var project_name: String = ProjectSettings.get_setting("application/config/name", "Unnamed")
 	var project_path: String = ProjectSettings.globalize_path("res://")
 	var pid: int = OS.get_process_id()
-	var plugin_version := "0.1"
+	var plugin_version: String = HasturOperationGDPluginSettings.get_plugin_version()
 	var version_info := Engine.get_version_info()
 	var editor_version := "%d.%d.%d" % [
 		version_info.get("major", 0),

@@ -2,9 +2,10 @@
 extends EditorPlugin
 
 const ExecutorDockScene = preload("./executor_dock.tscn")
+const ExecutorBackendScript = preload("res://addons/hasturoperationgd/executor_backend.gd")
 
 var _dock: EditorDock
-var _backend
+var _backend: Node
 
 
 func _enable_plugin() -> void:
@@ -18,7 +19,7 @@ func _disable_plugin() -> void:
 func _enter_tree() -> void:
 	HasturOperationGDPluginSettings.register_settings()
 
-	_backend = ExecutorBackend.new()
+	_backend = ExecutorBackendScript.new()
 	add_child(_backend)
 	_backend.initialize(self)
 
