@@ -1,4 +1,5 @@
 @tool
+class_name HasturExecutorDock
 extends Control
 
 
@@ -21,8 +22,8 @@ func _ready() -> void:
 
 	var status_bar = HBoxContainer.new()
 	_status_label = Label.new()
-	_status_label.text = "Disconnected"
-	_status_label.add_theme_color_override("font_color", Color.RED)
+	_status_label.text = "Remote HTTP (syncing…)"
+	_status_label.add_theme_color_override("font_color", Color(0.55, 0.55, 0.58))
 	status_bar.add_child(_status_label)
 
 	_id_label = LineEdit.new()
@@ -35,6 +36,13 @@ func _ready() -> void:
 	_id_label.tooltip_text = "Click and Ctrl+C to copy"
 	status_bar.add_child(_id_label)
 	vbox.add_child(status_bar)
+
+	var settings_hint := Label.new()
+	settings_hint.text = "Ports live under Project Settings → search hastur_operation (http_bind_host, http_port, game_http_port)."
+	settings_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	settings_hint.add_theme_font_size_override("font_size", 11)
+	settings_hint.add_theme_color_override("font_color", Color(0.5, 0.5, 0.52))
+	vbox.add_child(settings_hint)
 
 	_code_edit = CodeEdit.new()
 	_code_edit.custom_minimum_size = Vector2(0, 200)
@@ -79,6 +87,17 @@ func _ready() -> void:
 		_backend.connection_state_changed.connect(_on_connection_state_changed)
 		_backend.execution_completed.connect(_on_execution_completed)
 		_backend.history_cleared.connect(_on_history_cleared)
+		call_deferred("_sync_remote_http_ui")
+
+
+func _sync_remote_http_ui() -> void:
+	if not _backend:
+		return
+	_on_connection_state_changed(
+		_backend.is_remote_http_listening(),
+		_backend.get_executor_id(),
+		_backend.get_listen_url(),
+	)
 
 
 func _on_execute_pressed() -> void:
@@ -114,16 +133,18 @@ func _display_result(result: Dictionary) -> void:
 	_result_edit.text = text
 
 
-func _on_connection_state_changed(connected: bool, executor_id: String) -> void:
-	if connected:
-		_status_label.text = "Connected"
+func _on_connection_state_changed(listening: bool, executor_id: String, listen_url: String) -> void:
+	if listening:
+		_status_label.text = "Remote HTTP listening"
 		_status_label.add_theme_color_override("font_color", Color.GREEN)
-		_id_label.text = "ID: " + executor_id
+		_id_label.text = listen_url if listen_url != "" else ("ID: " + executor_id)
+		_id_label.tooltip_text = "Executor ID: " + executor_id
 		_id_label.visible = true
 	else:
-		_status_label.text = "Disconnected"
+		_status_label.text = "Remote HTTP unavailable"
 		_status_label.add_theme_color_override("font_color", Color.RED)
 		_id_label.text = ""
+		_id_label.tooltip_text = ""
 		_id_label.visible = false
 
 

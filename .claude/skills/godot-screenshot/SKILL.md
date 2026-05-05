@@ -1,20 +1,20 @@
 ---
 name: godot-screenshot
 description: |
-  Take screenshots of the Godot editor window or the running game window via the Hastur broker-server remote executor. Use this skill whenever the user asks to capture, save, or take a screenshot of the Godot editor or game runtime — including phrases like "截图", "screenshot", "capture screen", "save a picture of the editor/game", "snap the viewport", or any request involving saving the visual state of a running Godot instance. Also trigger when the user wants to automate periodic screenshots or compare visual output across runs. This skill depends on the godot-remote-executor skill — always load that skill first to understand the executor API and code execution mechanics.
+  Take screenshots of the Godot editor window or the running game window via the Hastur plugin HTTP API (same mechanics as godot-remote-executor — POST GDScript to the editor or game base URL). Use when the user asks for screenshots, 截图, capture screen, etc. Always load godot-remote-executor first for endpoint URLs and execution semantics.
 ---
 
 # Godot Screenshot
 
-This skill captures screenshots from a running Godot editor or game instance and saves them as PNG files. It depends on the **godot-remote-executor** skill — load it first so you understand how to discover executors and execute GDScript code over the broker HTTP API.
+This skill captures screenshots from a running Godot editor or game instance and saves them as PNG files. It depends on the **godot-remote-executor** skill — load it first so you know which **base URL** to hit (`HASTUR_EDITOR_BASE_URL` vs `HASTUR_GAME_BASE_URL`) and how `POST /api/execute` behaves.
 
 ## Prerequisites
 
 Before using this skill, you must have:
 
-1. **godot-remote-executor skill loaded** — understand the executor API, snippet mode, and error handling
-2. **Broker base URL** — same `HASTUR_BASE_URL` as godot-remote-executor (default `http://localhost:5302`)
-3. **At least one connected executor** — editor for editor screenshots, game for game screenshots
+1. **godot-remote-executor skill loaded** — editor vs game URLs, snippet mode, error handling
+2. **Correct base URL for the target process** — editor screenshots → editor URL; game viewport → game URL (defaults `http://127.0.0.1:5302` / `http://127.0.0.1:5303`)
+3. **That HTTP listener reachable** — plugin enabled in editor; for game, game running with `GameExecutor` autoload and non-zero game HTTP port
 
 ## How Viewport Capture Works
 
@@ -109,7 +109,7 @@ ei.play_current_scene()
 executeContext.output("result", "done")
 ```
 
-After launching, wait ~5 seconds for the game process to start and the GameExecutor autoload to connect to the broker-server. Poll `GET /api/executors` until a `type: "game"` executor appears.
+After launching, wait a few seconds for the game process to start its HTTP listener. Poll `GET HASTUR_GAME_BASE_URL/api/executors` until you get HTTP 200 with `type: "game"` metadata (or POST a trivial snippet to confirm the port answers).
 
 Other launch options:
 - `ei.play_main_scene()` — play the project's main scene

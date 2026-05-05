@@ -1,24 +1,25 @@
 ---
 name: godot-remote-executor
 description: |
-  Execute GDScript code on a running Godot editor or game runtime via the Hastur broker-server HTTP API (no Bearer token — use only on localhost or trusted networks). Use this skill whenever the user wants to manipulate a Godot editor or running game remotely — creating/modifying scenes, adjusting node properties, running editor operations, inspecting project state, querying live game runtime state (scene tree, physics, FPS, input, variables), or any task that requires interacting with a live Godot instance. The broker-server supports two executor types: "editor" (the editor plugin) and "game" (a GameExecutor autoload running in the game process). Target the game runtime by specifying `type: "game"` in execute requests. Trigger this skill when the user mentions Godot, Godot editor, GDScript execution, scene manipulation, node operations, game runtime inspection, live game state, or any task involving controlling a Godot project remotely, even if they don't explicitly mention "broker" or "remote execution." Also use when the user asks to inspect, query, or modify anything in their Godot project while the editor or game is running.
+  Execute GDScript on a running Godot editor or game via the Hastur plugin HTTP API served inside Godot (no Bearer token — localhost/trusted networks only). The editor plugin listens on one host/port (default http://127.0.0.1:5302); the optional GameExecutor autoload listens on another (default http://127.0.0.1:5303). Use POST /api/execute against the URL for the process you need. Trigger when the user wants remote GDScript execution, scene/editor/game inspection, or any live Godot control task.
 ---
 
 # Godot Remote Executor
 
-This skill enables you to execute arbitrary GDScript code on a running Godot editor or game runtime instance through the Hastur broker-server. The broker-server acts as a bridge: you send HTTP requests to it, and it forwards the code to a connected Hastur Executor (editor plugin or game runtime) via TCP.
+This skill talks **directly to the Hastur Godot plugin** over HTTP: the editor plugin embeds a tiny REST server; an optional `GameExecutor` autoload embeds another server inside the running game. There is no separate relay process.
 
-Executors have a `type` field: `"editor"` for the editor plugin, `"game"` for the GameExecutor autoload running in the game process. Use `type: "game"` to target the live game runtime — useful for inspecting runtime state, scene tree, physics, FPS, input, and variables during gameplay.
+Executors still report a `type` field: `"editor"` from the editor HTTP listener, `"game"` from the game listener. **Use the correct base URL** for the process you want (editor URL vs game URL) — posting to the editor URL with `"type": "game"` returns 404.
 
 ## Prerequisites
 
-Before you begin, confirm the broker-server **base URL** with the user. It defaults to `http://localhost:5302`; the host and port depend on how the broker was started (`--host`, `--http-port`).
+Confirm both URLs with the user (host/port live in **Project Settings → Hastur Operation GD**). Defaults:
 
-Store for the duration of the conversation:
+- `HASTUR_EDITOR_BASE_URL` — editor plugin HTTP API, default `http://127.0.0.1:5302`
+- `HASTUR_GAME_BASE_URL` — `GameExecutor` HTTP API when the game is running, default `http://127.0.0.1:5303` (use `0` for game port in settings to disable)
 
-- `HASTUR_BASE_URL` — defaults to `http://localhost:5302`
+For backwards-compat shorthand during a session you may keep using **`HASTUR_BASE_URL` = `HASTUR_EDITOR_BASE_URL`** when the task only touches the editor.
 
-The HTTP API does **not** use Bearer authentication. Treat the broker as a privileged service: bind it to localhost or put it behind a trusted network boundary — anyone who can reach the HTTP port can call `POST /api/execute` and run code in connected editors/games.
+The HTTP API does **not** use Bearer authentication. Treat every listener as a privileged local service — anyone who can reach that TCP port can run code in that Godot process.
 
 ## Step 0: Read GDScript Syntax Reference (Critical)
 
@@ -50,15 +51,17 @@ For global scope functions (print, push_error, etc.), read:
 For code style conventions, read:
 - `references/gdscript-syntax/gdscript_styleguide.rst.txt` — official style guide
 
-## Step 1: Discover Connected Executors
+## Step 1: Discover Executors (Per Process)
 
-First, check which Godot executors are connected to the broker-server. Run:
+Each HTTP listener exposes **only itself**. Query the editor and the game **separately**:
 
 ```bash
-curl -s HASTUR_BASE_URL/api/executors
+curl -s HASTUR_EDITOR_BASE_URL/api/executors
+curl -s HASTUR_GAME_BASE_URL/api/executors
 ```
 
-The response looks like:
+Editor response example (`type` is always `"editor"` on this endpoint):
+
 ```json
 {
   "success": true,
@@ -66,7 +69,7 @@ The response looks like:
     {
       "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
       "project_name": "my-game",
-      "project_path": "C:/Users/dev/projects/my-game",
+      "project_path": "/home/dev/my-game",
       "editor_pid": 12345,
       "plugin_version": "0.1",
       "editor_version": "4.6.0",
@@ -74,28 +77,18 @@ The response looks like:
       "connected_at": "2026-03-28T10:00:00.000Z",
       "status": "connected",
       "type": "editor"
-    },
-    {
-      "id": "b2c3d4e5-f6a7-8901-bcde-f12345678901",
-      "project_name": "my-game",
-      "project_path": "C:/Users/dev/projects/my-game",
-      "editor_pid": 67890,
-      "plugin_version": "0.1",
-      "editor_version": "4.6.0",
-      "supported_languages": ["gdscript"],
-      "connected_at": "2026-03-28T10:01:00.000Z",
-      "status": "connected",
-      "type": "game"
     }
   ]
 }
 ```
 
-Each executor has a `type` field: `"editor"` or `"game"`. Note the `id` and `type` for targeting specific executors.
+Game response shape matches but `"type": "game"` and `editor_pid` is the game's OS PID.
+
+When multiple Godot projects are open, each binds its own **HTTP port** in project settings — there is no central registry; hit the URL/Dock label for the instance you intend to drive.
 
 ## Step 1.5: Game Runtime Not Available — Auto-Recovery
 
-When the user's task requires targeting the game runtime (`type: "game"`) but no game executor appears in `/api/executors`, and an editor executor **is** connected, follow this recovery flow before reporting failure. This is a common situation — the user simply hasn't started the game or hasn't added the GameExecutor autoload yet.
+When the user's task requires targeting the game runtime but `curl -s HASTUR_GAME_BASE_URL/api/executors` fails or returns nothing useful **while** the editor endpoint works, follow this recovery flow before reporting failure. Typical causes: game not running, game HTTP port set to `0`, or missing `GameExecutor` autoload.
 
 ### Recovery Steps
 
@@ -125,7 +118,7 @@ Look for an entry containing `game_executor` or `GameExecutor`.
 - **If the game is not running but the autoload IS configured:** Ask:
   > "No game runtime is connected. The GameExecutor autoload is configured, but the game isn't running. Would you like me to start the game from the editor?"
 
-- **If the game IS running but no game executor appeared:** The game might still be starting up. Wait a few seconds and re-check `/api/executors`. If it still doesn't appear, the autoload might be missing — ask the user:
+- **If the game IS running but the game HTTP endpoint still fails:** Wait a few seconds and re-check `GET HASTUR_GAME_BASE_URL/api/executors`. If it still fails, the autoload might be missing or the game port disabled — ask the user:
   > "The game appears to be running but no game executor connected. The GameExecutor autoload may not be registered. Would you like me to add it to the project settings? (You'll need to restart the game afterwards.)"
 
 **4. Execute user-approved actions** — Only after the user confirms:
@@ -163,36 +156,39 @@ Never start the game or modify project settings without the user's explicit appr
 
 ## Step 2: Execute Code
 
-Send GDScript code to a connected editor via POST request:
+Send GDScript to the editor listener:
 
 ```bash
 curl -s -X POST \
   -H "Content-Type: application/json" \
-  -d '{"code": "<GDScript code here>", "executor_id": "<executor id>"}' \
-  HASTUR_BASE_URL/api/execute
+  -d '{"code": "<GDScript code here>"}' \
+  HASTUR_EDITOR_BASE_URL/api/execute
 ```
 
-### Targeting an Executor
+Send GDScript to the **game** listener (must use the game base URL):
 
-You can identify the target executor in three ways (provide exactly one):
-- `executor_id` — exact match, most reliable
-- `project_name` — fuzzy substring match on the project name
-- `project_path` — fuzzy substring match on the project path
+```bash
+curl -s -X POST \
+  -H "Content-Type: application/json" \
+  -d '{"code": "executeContext.output(\"fps\", str(Engine.get_frames_per_second()))"}' \
+  HASTUR_GAME_BASE_URL/api/execute
+```
 
-When only one executor is connected, `project_name` is convenient. When multiple executors are connected, use `executor_id` to be precise.
+### Targeting Fields (Optional)
+
+You may omit `executor_id`, `project_name`, and `project_path` — the code runs on whichever process owns the TCP port you called.
+
+If you include any of them, they must match **this** instance or the server responds with 404:
+
+- `executor_id` — exact match (from `/api/executors`)
+- `project_name` — fuzzy substring match on project name
+- `project_path` — fuzzy substring match on project path
+
+Use these guards when you want curl mistakes to fail loudly instead of running on the wrong port.
 
 ### Filtering by Type
 
-Add `"type": "editor"` or `"type": "game"` to the request body to restrict the executor search to a specific type:
-
-```bash
-curl -s -X POST \
-  -H "Content-Type: application/json" \
-  -d '{"code": "executeContext.output(\"fps\", str(Engine.get_frames_per_second()))", "project_name": "my-game", "type": "game"}' \
-  HASTUR_BASE_URL/api/execute
-```
-
-This is useful when both an editor and a game executor are connected for the same project — use `type: "game"` to target the live game process, or `type: "editor"` to target the editor.
+`"type": "editor"` / `"type": "game"` must agree with the listener you POST to. Use the game URL for runtime inspection; the editor URL drives the editor plugin.
 
 ### Execution Modes
 
@@ -222,7 +218,6 @@ func execute(executeContext):
 {
   "success": true,
   "data": {
-    "request_id": "uuid",
     "compile_success": true,
     "compile_error": "",
     "run_success": true,

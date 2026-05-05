@@ -2,7 +2,7 @@
 
 # Hastur Operation Plugin
 
-一个 Godot 编辑器插件，可通过 HTTP API 远程执行任意 GDScript 代码。
+一个 Godot 编辑器插件，在编辑器进程内提供 HTTP API，供 coding agent 远程执行任意 GDScript（可选地在运行中的游戏里通过 Autoload 再开一组端口）。
 
 ## 它是做什么的？
 
@@ -10,7 +10,7 @@
 
 但 Godot 编辑器是一个 GUI 应用，无法通过 `curl` 之类的命令行工具来操控场景节点。此前做不到，现在可以了。
 
-本插件为 coding agent 提供了一个操控 Godot 编辑器的"shell"接口。通过 REST API，agent 可以做到：
+本插件为 coding agent 提供了一个操控 Godot 的「shell」接口。**HTTP 服务跑在插件内部**，agent 可以：
 
 - 查看和操作场景树
 - 创建、修改、删除节点
@@ -18,25 +18,30 @@
 - 执行各类编辑器操作
 - 凡是在编辑器脚本面板中手写 GDScript 能做到的事，均可完成
 
-简而言之，就是给 AI 助手提供了一把专门操作 Godot 编辑器的螺丝刀。
+简而言之，就是给 AI 助手提供了一把专门操作 Godot 的螺丝刀。
 
 ## 工作原理
 
-架构简洁清晰，采用三级转发：
-
 ```
-┌─────────────────┐         ┌─────────────────┐         ┌─────────────────────┐
-│   Coding Agent  │  HTTP   │  Broker Server   │   TCP   │  Godot 编辑器        │
-│  (opencode,     │ ──────> │  (Node.js/Express│ ──────> │  (Hastur Executor   │
-│   Claude 等)    │ <────── │   + TCP 中继)    │ <────── │   插件)              │
-└─────────────────┘         └─────────────────┘         └─────────────────────┘
+┌─────────────────┐         ┌──────────────────────────────┐
+│   Coding Agent  │  HTTP   │  Godot 编辑器                │
+│  (opencode,     │ ──────> │  Hastur 插件绑定 host:port    │
+│   Claude 等)    │ <────── │  （默认 127.0.0.1:5302）执行   │
+└─────────────────┘         │  GDScript                     │
+                            └──────────────────────────────┘
+
+可选：运行中游戏进程上的第二个 HTTP 监听（GameExecutor autoload）：
+
+┌─────────────────┐         ┌──────────────────────────────┐
+│   Coding Agent  │  HTTP   │  游戏进程 + GameExecutor      │
+│                 │ ──────> │  （默认 127.0.0.1:5303）       │
+└─────────────────┘         └──────────────────────────────┘
 ```
 
-1. **Coding Agent** 发送 `POST /api/execute` 请求，携带 GDScript 代码及用于选定执行器的标识字段。
-2. **Broker Server** 通过 TCP 定位目标编辑器并转发代码。
-3. **Hastur Executor 插件**（运行在 Godot 编辑器内部）接收代码，编译执行后将结果原路返回。
+1. Agent 向**编辑器**或**游戏**各自的 HTTP 地址发送 `GET /api/executors`、`POST /api/execute`。
+2. **编辑器插件**或 **GameExecutor** 直接在进程内处理请求，**不再需要单独的 Node 中继服务**。
 
-中间设置 Broker Server 的原因在于：Godot 自身的 HTTP 能力较为有限。当前 HTTP API **不对请求方做鉴权** —— 须将其视为高权限本地服务：默认绑定 `localhost`，或仅部署在你完全信任的网络上。
+HTTP API **不对调用方鉴权**，须视为高权限本地服务：建议 **项目设置 → Hastur Operation GD → HTTP bind host** 保持 `127.0.0.1`（默认），或仅在完全信任的网络中使用。
 
 ## 项目结构
 
@@ -46,21 +51,13 @@ hastur-operation-plugin/
 │   └── hasturoperationgd/          # Godot 插件（拷贝到项目目录即可）
 │       ├── plugin.cfg               # 插件配置
 │       ├── hasturoperationgd.gd     # 入口，EditorPlugin
-│       ├── executor_backend.gd      # 后端协调器（本地 + 远程执行）
+│       ├── executor_backend.gd      # 后端（本地 + HTTP 远程执行）
+│       ├── hastur_executor_http_api.gd  # 精简 HTTP 服务
 │       ├── gdscript_executor.gd     # 编译并执行 GDScript 代码片段
 │       ├── execution_context.gd     # 执行结果收集器
-│       ├── broker_client.gd         # 连接 broker server 的 TCP 客户端
 │       ├── executor_dock.gd         # 编辑器 Dock 面板 UI
+│       ├── game_executor.gd         # 可选 Autoload — 游戏进程内 HTTP API
 │       └── hastur_operation_gd_plugin_settings.gd  # 项目设置
-│
-├── broker-server/                   # 中继服务器（Node.js）
-│   ├── src/
-│   │   ├── index.ts                 # 命令行入口（commander）
-│   │   ├── http-server.ts           # Express HTTP API（执行、执行器列表、健康检查）
-│   │   ├── tcp-server.ts            # TCP 中继，转发至 Godot 插件
-│   │   ├── executor-manager.ts      # 管理已连接的编辑器实例
-│   │   └── types.ts                 # 共享的 TypeScript 类型定义
-│   └── package.json
 │
 └── .claude/skills/
 	└── godot-remote-executor/       # Coding agent 技能定义
@@ -72,82 +69,69 @@ hastur-operation-plugin/
 ### 环境要求
 
 - [Godot 4.x](https://godotengine.org/)（已测试 4.6+）
-- [Node.js](https://nodejs.org/) 18+（用于 broker server）
 - 支持加载自定义技能的 coding agent（如 opencode、Claude）
 
-### 第一步：启动 Broker Server
+### 第一步：在 Godot 中安装插件
+
+将 `addons/hasturoperationgd/` 拷贝到项目的 `addons/` 下，在 **项目 → 项目设置 → 插件** 中启用。
+
+在 **项目设置 → Hastur Operation GD** 中配置：
+
+- **HTTP bind host**：默认 `127.0.0.1`
+- **HTTP port**：编辑器 API，默认 `5302`
+- **Game HTTP port**：`GameExecutor` Autoload 的游戏进程 API，默认 `5303`；设为 `0` 表示关闭
+
+（若曾使用 `hastur_operation/broker_host`、`broker_port`，请改用上方的 HTTP 相关设置。）
+
+插件成功绑定端口后，Dock 会显示 **Remote HTTP listening** 及 Base URL（例如 `http://127.0.0.1:5302`）。若绑定失败（端口占用），请查看 Output 并更换端口。
+
+### 第二步：把 Base URL 告诉 Coding Agent
+
+加载 `godot-remote-executor` 技能，告知编辑器 **Base URL**（默认 `http://127.0.0.1:5302`）。若要操控**运行中的游戏**，需配置 `GameExecutor` Autoload，并使用游戏端 URL（默认 `http://127.0.0.1:5303`）。
+
+示例（编辑器）：
 
 ```bash
-cd broker-server
-npm install
-npm run dev
-```
+curl -s http://127.0.0.1:5302/api/executors
 
-启动后，HTTP 服务监听 `localhost:5302`，TCP 服务监听 `localhost:5301`。
-
-也可手动指定主机与端口：
-
-```bash
-npx tsx src/index.ts --http-port 8080 --tcp-port 8081 --host localhost
-```
-
-### 第二步：在 Godot 中安装插件
-
-将 `addons/hasturoperationgd/` 文件夹拷贝到 Godot 项目的 `addons/` 目录下，然后在 **项目 → 项目设置 → 插件** 中启用。
-
-插件启动后会自动连接 broker server（默认地址 `localhost:5301`）。连接配置可在 **项目设置 → Hastur Operation GD** 中修改。
-
-连接成功后，编辑器 Dock 面板会显示绿色状态。若未显示，请检查 broker server 是否正在运行。
-
-### 第三步：将控制权交给 Coding Agent
-
-在 coding agent 中加载 `godot-remote-executor` 技能，并告知 **Base URL**（默认为 `http://localhost:5302`）。
-
-之后 agent 即可发现已连接的编辑器并在其上执行 GDScript 代码。示例：
-
-```bash
-# 查看已连接的编辑器
-curl -s http://localhost:5302/api/executors
-
-# 执行代码
 curl -s -X POST \
   -H "Content-Type: application/json" \
-  -d '{"code": "print(\"hello from the other side\")", "project_name": "my-game"}' \
-  http://localhost:5302/api/execute
+  -d '{"code": "print(\"hello from the other side\")"}' \
+  http://127.0.0.1:5302/api/execute
 ```
 
 ## API 参考
 
 ### `GET /api/health`
 
-健康检查。
+健康检查；`data` 中含 `http_host`、`http_port`。
 
 ### `GET /api/executors`
 
-列出所有已连接的 Godot 编辑器实例。
+仅返回**当前该 HTTP 监听进程**对应的执行器信息（数组长度为 1）。
 
 ### `POST /api/execute`
 
-在指定编辑器上执行 GDScript 代码。
+在本进程内执行 GDScript。
 
 **请求体：**
 
-| 字段            | 类型   | 说明                      |
-| --------------- | ------ | ------------------------- |
-| `code`          | string | 要执行的 GDScript 代码    |
-| `executor_id`   | string | 精确匹配执行器 ID（可选） |
-| `project_name`  | string | 项目名模糊匹配（可选）    |
-| `project_path`  | string | 项目路径模糊匹配（可选）  |
+| 字段            | 类型   | 说明                                      |
+| --------------- | ------ | ----------------------------------------- |
+| `code`          | string | 要执行的 GDScript（必填）                 |
+| `executor_id`   | string | 若填写则须与本实例一致                     |
+| `project_name`  | string | 项目名模糊匹配（可选）                     |
+| `project_path`  | string | 项目路径模糊匹配（可选）                   |
+| `type`          | string | `"editor"` / `"game"`，须与本监听进程一致 |
 
-三个定位字段任选其一即可，用于指定目标编辑器。
+若不提供 `executor_id`、`project_name`、`project_path`，请求发往哪个地址就在哪个实例上执行；若提供且不匹配则返回 404。
 
-**响应：**
+**响应示例：**
 
 ```json
 {
   "success": true,
   "data": {
-	"request_id": "uuid",
 	"compile_success": true,
 	"compile_error": "",
 	"run_success": true,
@@ -159,31 +143,16 @@ curl -s -X POST \
 
 ### 执行模式
 
-**代码片段模式**（默认）：当代码中不含 `extends` 时，会自动包装为 `@tool extends RefCounted` 类，并注入 `executeContext` 变量用于返回结果：
+**代码片段模式**（默认）：代码中不含 `extends` 时，会自动包装为 `@tool extends RefCounted` 类，并注入 `executeContext`。
 
-```gdscript
-var tree = Engine.get_main_loop() as SceneTree
-var scene = tree.edited_scene_root
-executeContext.output("scene_name", scene.name)
-executeContext.output("child_count", str(scene.get_child_count()))
-```
-
-**完整类模式**：当代码中包含 `extends` 时，需自行定义 `func execute(executeContext):`：
-
-```gdscript
-extends Node
-
-func execute(executeContext):
-	var root = get_tree().root
-	executeContext.output("viewport_size", str(root.get_visible_rect().size))
-```
+**完整类模式**：代码含 `extends` 时需自行定义 `func execute(executeContext):`。
 
 ## 安全提醒
 
-本插件会在编辑器中执行任意代码，这一点务必清楚。**HTTP API 不提供鉴权**：任何能访问 broker HTTP 端口的客户端都可以列出执行器并在已连接的编辑器或游戏进程中执行代码。因此：
+本插件会在编辑器或游戏进程中执行任意代码。**HTTP API 不提供鉴权**：任何能访问所绑定地址与端口的客户端都可执行代码。
 
-- **切勿将 broker server 暴露至公网。** 默认绑定 `localhost`，或仅放在你完全信任的内网环境中。
-- **务必信任 coding agent 与当前网络。** 只要端口可达，即应视为可获得与编辑器等同的操控能力。
+- **切勿把监听地址暴露到公网**，优先使用 `127.0.0.1`。
+- **务必信任 coding agent 与当前网络环境。**
 
 ## 许可证
 

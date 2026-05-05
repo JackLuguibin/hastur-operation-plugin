@@ -2,7 +2,7 @@
 
 # Hastur Operation Plugin
 
-A Godot editor plugin that lets you remotely execute arbitrary GDScript code snippets via an HTTP API.
+A Godot editor plugin that exposes a small HTTP API so coding agents can remotely execute arbitrary GDScript in the editor (and optionally in a running game via an autoload).
 
 Yes, you read that correctly. Arbitrary code. Over HTTP. On purpose this time.
 
@@ -12,7 +12,7 @@ Coding agents are frighteningly good at executing shell commands. They can `npm 
 
 But a Godot editor? That's a GUI application. You can't exactly `curl` your way into rearranging scene nodes. Until now.
 
-This plugin gives coding agents a "shell" into the Godot editor. Through a simple REST API, an agent can:
+This plugin gives coding agents a "shell" into the Godot editor. Through a simple REST API served **inside the plugin**, an agent can:
 
 - Inspect and manipulate the scene tree
 - Create, modify, or delete nodes
@@ -24,21 +24,26 @@ Think of it as giving your AI assistant a Godot-sized screwdriver.
 
 ## How It Works
 
-The architecture is straightforward — a three-part relay:
-
 ```
-┌─────────────────┐         ┌─────────────────┐         ┌─────────────────────┐
-│   Coding Agent  │  HTTP   │  Broker Server   │   TCP   │  Godot Editor       │
-│  (opencode,     │ ──────> │  (Node.js/Express│ ──────> │  (Hastur Executor   │
-│   Claude, etc.) │ <────── │   + TCP relay)   │ <────── │   Plugin)           │
-└─────────────────┘         └─────────────────┘         └─────────────────────┘
+┌─────────────────┐         ┌──────────────────────────────┐
+│   Coding Agent  │  HTTP   │  Godot Editor               │
+│  (opencode,     │ ──────> │  Hastur plugin binds host:   │
+│   Claude, etc.) │ <────── │  port (default 127.0.0.1:   │
+└─────────────────┘         │  5302) → executes GDScript  │
+                            └──────────────────────────────┘
+
+ Optional second HTTP listener (running game process):
+
+┌─────────────────┐         ┌──────────────────────────────┐
+│   Coding Agent  │  HTTP   │  Game + GameExecutor autoload│
+│                 │ ──────> │  (default 127.0.0.1:5303)    │
+└─────────────────┘         └──────────────────────────────┘
 ```
 
-1. **Coding Agent** sends a `POST /api/execute` request containing GDScript code (and identifiers to pick a connected executor).
-2. **Broker Server** locates the target editor via TCP and relays the code.
-3. **Hastur Executor Plugin** (running inside the Godot editor) receives the code, compiles and executes it, then returns the result back through the same pipe.
+1. **Coding Agent** sends `GET /api/executors` or `POST /api/execute` to the **editor** HTTP endpoint (or to the **game** endpoint when targeting runtime code).
+2. The **Hastur plugin** (editor) or **GameExecutor** autoload (game) handles the request directly — no separate relay process.
 
-The broker server exists because Godot's built-in HTTP client capabilities are... modest. The HTTP API does **not** authenticate callers — treat it as a privileged local service: bind to `localhost` (the default) or keep it on a network you fully trust.
+The HTTP API does **not** authenticate callers — treat it as a privileged local service: keep **Project Settings → Hastur Operation GD → HTTP bind host** on `127.0.0.1` (default) or a network you fully trust.
 
 ## Project Structure
 
@@ -48,21 +53,13 @@ hastur-operation-plugin/
 │   └── hasturoperationgd/          # The Godot plugin (copy this to your project)
 │       ├── plugin.cfg               # Plugin manifest
 │       ├── hasturoperationgd.gd     # Entry point — EditorPlugin
-│       ├── executor_backend.gd      # Backend orchestrator (local + remote execution)
+│       ├── executor_backend.gd      # Backend (local + HTTP remote execution)
+│       ├── hastur_executor_http_api.gd  # Minimal HTTP server (health, executors, execute)
 │       ├── gdscript_executor.gd     # Compiles and runs GDScript snippets
 │       ├── execution_context.gd     # Output collector for execution results
-│       ├── broker_client.gd         # TCP client connecting to the broker server
 │       ├── executor_dock.gd         # Dock UI for the editor panel
+│       ├── game_executor.gd         # Optional autoload — HTTP API inside the game process
 │       └── hastur_operation_gd_plugin_settings.gd  # Project settings
-│
-├── broker-server/                   # The relay server (Node.js)
-│   ├── src/
-│   │   ├── index.ts                 # CLI entry point (commander)
-│   │   ├── http-server.ts           # Express HTTP API (execute, executors, health)
-│   │   ├── tcp-server.ts            # TCP relay to Godot plugin instances
-│   │   ├── executor-manager.ts      # Tracks connected editor instances
-│   │   └── types.ts                 # Shared TypeScript interfaces
-│   └── package.json
 │
 └── .claude/skills/
     └── godot-remote-executor/       # Skill definition for coding agents
@@ -74,74 +71,64 @@ hastur-operation-plugin/
 ### Prerequisites
 
 - [Godot 4.x](https://godotengine.org/) (tested with 4.6+)
-- [Node.js](https://nodejs.org/) 18+ (for the broker server)
 - A coding agent that supports loading custom skills (e.g., opencode, Claude)
 
-### Step 1: Start the Broker Server
-
-```bash
-cd broker-server
-npm install
-npm run dev
-```
-
-This starts the broker server on `localhost:5302` (HTTP) and `localhost:5301` (TCP).
-
-You can also configure host and ports manually:
-
-```bash
-npx tsx src/index.ts --http-port 8080 --tcp-port 8081 --host localhost
-```
-
-### Step 2: Install the Plugin in Godot
+### Step 1: Install the Plugin in Godot
 
 Copy the `addons/hasturoperationgd/` folder into your Godot project's `addons/` directory, then enable the plugin in **Project → Project Settings → Plugins**.
 
-The plugin will automatically try to connect to the broker server at the configured host and port (defaults to `localhost:5301`). You can change these in **Project Settings → Hastur Operation GD**.
+Under **Project Settings → Hastur Operation GD**:
 
-Once connected, the editor dock panel will show a green connection status. If it doesn't, check that the broker server is running.
+- **HTTP bind host** — default `127.0.0.1`
+- **HTTP port** — editor API, default `5302`
+- **Game HTTP port** — runtime API when using the `GameExecutor` autoload, default `5303`; set to `0` to disable
 
-### Step 3: Give Your Coding Agent the Keys
+*(If you previously used `hastur_operation/broker_host` / `broker_port`, those settings are obsolete — configure the HTTP fields above instead.)*
 
-Load the `godot-remote-executor` skill in your coding agent and provide the **base URL** (defaults to `http://localhost:5302`).
+When the editor plugin loads successfully, the dock shows **Remote HTTP listening** with the base URL (for example `http://127.0.0.1:5302`). If binding fails (port already in use), check the Output panel and adjust the port.
 
-Your agent can now discover connected editors and execute GDScript code on them. For example:
+### Step 2: Give Your Coding Agent the Base URL
+
+Load the `godot-remote-executor` skill and tell the agent the editor **base URL** (defaults to `http://127.0.0.1:5302`). To drive code in a **running game**, configure the `GameExecutor` autoload and use the game URL (defaults to `http://127.0.0.1:5303`).
+
+Example (editor):
 
 ```bash
-# List connected editors
-curl -s http://localhost:5302/api/executors
+# This instance's executor metadata (always a single entry — this listener)
+curl -s http://127.0.0.1:5302/api/executors
 
-# Execute code
+# Execute code (minimal body — targets whoever owns this port)
 curl -s -X POST \
   -H "Content-Type: application/json" \
-  -d '{"code": "print(\"hello from the other side\")", "project_name": "my-game"}' \
-  http://localhost:5302/api/execute
+  -d '{"code": "print(\"hello from the other side\")"}' \
+  http://127.0.0.1:5302/api/execute
 ```
 
 ## API Reference
 
 ### `GET /api/health`
 
-Health check.
+Health check. Response `data` includes `http_host` and `http_port`.
 
 ### `GET /api/executors`
 
-List all connected Godot editor instances.
+Returns metadata for **this** HTTP listener only (an array with one object).
 
 ### `POST /api/execute`
 
-Execute GDScript code on a connected editor.
+Execute GDScript in the process that owns this HTTP port.
 
 **Request body:**
 
 | Field           | Type   | Description                                      |
 | --------------- | ------ | ------------------------------------------------ |
-| `code`          | string | GDScript code to execute                         |
-| `executor_id`   | string | Exact executor ID (optional)                     |
-| `project_name`  | string | Fuzzy match on project name (optional)           |
-| `project_path`  | string | Fuzzy match on project path (optional)           |
+| `code`          | string | GDScript code to execute (required)              |
+| `executor_id`   | string | Must match this instance if provided             |
+| `project_name`  | string | Fuzzy substring match on project name (optional) |
+| `project_path`  | string | Fuzzy substring match on project path (optional) |
+| `type`          | string | `"editor"` or `"game"` — must match this listener |
 
-Provide exactly one of `executor_id`, `project_name`, or `project_path` to target an editor.
+If you omit `executor_id`, `project_name`, and `project_path`, the snippet runs on the instance you connected to. Use identifiers when you want the server to reject mismatched payloads.
 
 **Response:**
 
@@ -149,7 +136,6 @@ Provide exactly one of `executor_id`, `project_name`, or `project_path` to targe
 {
   "success": true,
   "data": {
-    "request_id": "uuid",
     "compile_success": true,
     "compile_error": "",
     "run_success": true,
@@ -182,10 +168,10 @@ func execute(executeContext):
 
 ## A Note on Security
 
-This plugin literally executes arbitrary code in your editor. The HTTP API has **no authentication** — anyone who can reach the broker's HTTP port can list executors and run code on connected editors or games. You should:
+This plugin literally executes arbitrary code in your editor (or game). The HTTP API has **no authentication** — anyone who can reach the bound host/port can run code. You should:
 
-- **Never expose the broker server to the public internet.** Bind to `localhost` (the default) or keep it inside a trusted network only.
-- **Trust your coding agent and your network.** If the port is reachable, assume full editor access is possible.
+- **Never expose these ports to the public internet.** Prefer `127.0.0.1`.
+- **Trust your coding agent and your network.** If the port is reachable, assume full access to that Godot process.
 
 ## License
 

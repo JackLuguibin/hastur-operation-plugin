@@ -1,9 +1,11 @@
 @tool
 extends EditorPlugin
 
+const _ExecutorBackendRes = preload("./executor_backend.gd")
+const _HasturExecutorDockRes = preload("./executor_dock.gd")
 
 var _dock: EditorDock
-var _backend: ExecutorBackend
+var _backend
 
 
 func _enable_plugin() -> void:
@@ -17,7 +19,7 @@ func _disable_plugin() -> void:
 func _enter_tree() -> void:
 	HasturOperationGDPluginSettings.register_settings()
 
-	_backend = ExecutorBackend.new()
+	_backend = _ExecutorBackendRes.new()
 	add_child(_backend)
 	_backend.initialize(self)
 
@@ -25,7 +27,7 @@ func _enter_tree() -> void:
 	_dock.title = "Hastur Executor"
 	_dock.default_slot = EditorDock.DOCK_SLOT_RIGHT_UL
 	_dock.available_layouts = EditorDock.DOCK_LAYOUT_VERTICAL | EditorDock.DOCK_LAYOUT_FLOATING
-	var dock_content = preload("executor_dock.gd").new()
+	var dock_content = _HasturExecutorDockRes.new()
 	dock_content.initialize(_backend)
 	_dock.add_child(dock_content)
 	add_dock(_dock)
